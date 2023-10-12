@@ -1,6 +1,6 @@
 # Power analysis for regression models via simulation
 
-This repository contains Python code for performing power analysis for regression models via simulation.
+This repository contains Python code for performing power analysis for regression models via simulation. This is particularly useful for estimating power for complex regression models with data that may not be normally distributed.
 
 ## Installation
 
@@ -14,7 +14,7 @@ pip install -e .
 
 ### Running power analyses
 
-The package first generates simulated data using tools from the (Copulas)[https://sdv.dev/Copulas/index.html] package. This data should closely approximate the distributions and covariance structure of the true data. It then samples from the fitted copula to generate synthetic data with given sample sizes.
+The package first generates simulated data using tools from the [Copulas](https://sdv.dev/Copulas/index.html) package. This data should closely approximate the distributions and covariance structure of the true data. It then samples from the fitted copula to generate synthetic data with given sample sizes.
 
 Power analysis can be run using the `power_analysis` function. This takes as input a dataset along with the dependent and independent variables.
 
