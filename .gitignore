@@ -1,0 +1,4 @@
+# ignore egg-info files
+*.egg-info
+# pycache
+__pycache__

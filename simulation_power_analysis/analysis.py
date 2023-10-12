@@ -8,7 +8,7 @@ import seaborn as sns
 from copulas.multivariate import GaussianMultivariate
 from copulas.univariate import BetaUnivariate, GaussianKDE, GaussianUnivariate
 from joblib import Parallel, delayed
-from stats_utils.regression import add_bootstrap_methods_to_ols
+from stats_utils.regression.analysis import add_bootstrap_methods_to_ols
 from tqdm import tqdm
 import statsmodels.formula.api as smf
 
