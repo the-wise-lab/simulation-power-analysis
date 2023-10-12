@@ -140,6 +140,10 @@ def plot_power_curves(
 
     plt.figure(**figure_kwargs)
 
+    if required_power > 1:
+        raise ValueError("Required power must be between 0 and 1")
+    
+
     # Get matplotlib default color cycle
     prop_cycle = plt.rcParams["axes.prop_cycle"]
 
@@ -161,22 +165,28 @@ def plot_power_curves(
         plt.plot(curve_x, curve_y)
 
         # Get sample size for 80% power
-        idx_power = np.where(curve_y > required_power)[0][0]
-        sample_size = curve_x[idx_power]
+        if np.all(curve_y < required_power):
+            # Raise warning and skip
+            print(
+                f"Warning: {variable} does not reach {required_power * 100}% power with the current sample size range."
+            )
+        else:
+            idx_power = np.where(curve_y > required_power)[0][0]
+            sample_size = curve_x[idx_power]
 
-        # Print out the sample size for this variable
-        print(
-            f"Sample size for {required_power * 100}% power for {variable}: {sample_size:.0f}"
-        )
+            # Print out the sample size for this variable
+            print(
+                f"Sample size for {required_power * 100}% power for {variable}: {sample_size:.0f}"
+            )
 
-        # Plot a vertical line at the sample size for 80% power, cutting off at the line
-        # start y axis at the minimum power value currently plotted
-        plt.plot(
-            [sample_size, sample_size],
-            [0, curve_y[idx_power]],
-            color=prop_cycle.by_key()["color"][n],
-            linestyle="--",
-        )
+            # Plot a vertical line at the sample size for 80% power, cutting off at the line
+            # start y axis at the minimum power value currently plotted
+            plt.plot(
+                [sample_size, sample_size],
+                [0, curve_y[idx_power]],
+                color=prop_cycle.by_key()["color"][n],
+                linestyle="--",
+            )
 
     # Adjust y axis limits based on the minimum and maximum power values
     minimum_power = power_df["power"].min()
