@@ -70,7 +70,7 @@ def fit_distribution(
     # Fit the copula
     dist.fit(true_data)
 
-    return dist, 
+    return dist
 
 
 def simulation_func(
