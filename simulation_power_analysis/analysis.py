@@ -1,5 +1,5 @@
 import contextlib
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Tuple
 
 import joblib.parallel
 import numpy as np
@@ -11,6 +11,7 @@ from joblib import Parallel, delayed
 from stats_utils.regression.analysis import add_bootstrap_methods_to_ols
 from tqdm import tqdm
 import statsmodels.formula.api as smf
+import warnings
 
 
 def sample_synthetic(
@@ -40,9 +41,7 @@ def sample_synthetic(
     return samples
 
 
-def fit_distribution(
-    true_data: pd.DataFrame
-) -> (GaussianMultivariate, pd.DataFrame):
+def fit_distribution(true_data: pd.DataFrame) -> (GaussianMultivariate, pd.DataFrame):
     """
     Fits a GaussianMultivariate copula.
 
@@ -116,11 +115,11 @@ def simulation_func(
         _ = fitted_model.conf_int_bootstrap()
 
         # Return p-values for predictors (ignoring the intercept)
-        return fitted_model.pvalues_bootstrap[1:]
+        return sample_size, fitted_model.pvalues_bootstrap[1:]
 
     except:
         # If an exception occurs, return NaNs of length equal to the number of predictors
-        return np.zeros(len(predictors)) * np.nan
+        return sample_size, np.zeros(len(predictors)) * np.nan
 
 
 @contextlib.contextmanager
@@ -163,6 +162,49 @@ def tqdm_joblib(tqdm_object: tqdm) -> tqdm:
         tqdm_object.close()
 
 
+def chunk_tasks(tasks: List[int], n: int, verbose:bool = False) -> List[List[int]]:
+    """
+    Split the tasks into n chunks based on sample size.
+
+    This function sorts the tasks based on sample size in ascending order and then chunks them.
+    Chunks are balanced so that they have a similar number of samples.
+
+    Args:
+        tasks (List[int]): List of tasks where each task is represented by a sample size.
+        n (int): Number of chunks to split the tasks into.
+        verbose (bool): Whether to print the chunking results. Defaults to False.
+
+    Returns:
+        List[List[int]]: List of chunks where each chunk is a list of sample sizes.
+    """
+
+    # Sort values in descending order
+    sorted_values = sorted(tasks, reverse=True)
+
+    # Initialize chunks and their sums
+    chunks = [[] for _ in range(n)]
+    chunk_sums = [0] * n
+
+    # Distribute values to chunks
+    for value in sorted_values:
+        # Get index of the chunk with the smallest sum
+        min_sum_idx = chunk_sums.index(min(chunk_sums))
+        # Add value to that chunk
+        chunks[min_sum_idx].append(value)
+        # Update the chunk's sum
+        chunk_sums[min_sum_idx] += value
+
+    # Print statement indicating how the tasks have been chunked
+    if verbose:
+        print("Task chunking:")
+        for i, chunk in enumerate(chunks):
+            print(
+                f"Chunk {i+1} - Size: {len(chunk)}, Average sample size: {np.mean([task for task in chunk])}"
+            )
+
+    return chunks
+
+
 def power_analysis(
     data: pd.DataFrame,
     dependent_var: str,
@@ -203,11 +245,13 @@ def power_analysis(
     # Ensure that sample sizes are positive for valid simulation
     assert np.all(sample_sizes > 0)
 
-    # Check for anything that looks like a binary column based on the number of unique values, 
+    # Check for anything that looks like a binary column based on the number of unique values,
     # and raise a warning if it isn't included in the binary_cols list
     for col in data.columns:
         if len(data[col].unique()) == 2 and col not in binary_cols:
-            print(f"Warning: {col} looks like a binary column but is not included in binary_cols.")
+            print(
+                f"Warning: {col} looks like a binary column but is not included in binary_cols."
+            )
 
     # If variables are not explicitly specified, use all columns in the data
     if variables is None:
@@ -220,32 +264,59 @@ def power_analysis(
     # Fit the distribution to the data
     dist = fit_distribution(data)
 
-    # Initialize an array to store p-values for all iterations and sample sizes
+    # Prepare a list of tasks (sample_size, iteration index)
+    tasks = [(ss, i) for ss in sample_sizes for i in range(n_iter)]
+
+    # Function to execute a single task
+    def execute_task(task):
+        ss, _ = task
+        return simulation_func(dist, ss, variables, dependent_var, binary_cols)
+
+    # Parallel execution
+    if n_jobs != 1:
+        # Chunk tasks for parallel execution
+        task_chunks = chunk_tasks([ss for ss, _ in tasks], n_jobs)
+
+        print(
+            f"Running {len(tasks)} tasks in {len(task_chunks)} chunks with {n_jobs} jobs."
+        )
+
+        # Function to execute each chunk of tasks
+        def execute_chunk(chunk):
+            # Hide FutureWarnings - patsy raises lots
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=FutureWarning)
+                return [
+                    simulation_func(dist, ss, variables, dependent_var, binary_cols)
+                    for ss in chunk
+                ]
+
+        with tqdm_joblib(
+            tqdm(desc="Calculating power", total=len(tasks))
+        ) as progress_bar:
+            results = Parallel(n_jobs=n_jobs)(
+                delayed(execute_chunk)(chunk) for chunk in task_chunks
+            )
+
+        # Flatten the results list
+        results = [item for sublist in results for item in sublist]
+
+    # Serial execution
+    else:
+        results = [execute_task(task) for task in tqdm(tasks, desc="Calculating power")]
+
+    # Unpack sample sizes and p-values from results
+    returned_sample_sizes = np.array([result[0] for result in results])
+    pvals = np.array([result[1] for result in results])
+
+    # Reshape the p-values into the expected all_pvals shape
     all_pvals = np.zeros((len(sample_sizes), n_iter, len(variables)))
 
-    # Loop over each sample size
-    for n, ss in enumerate(sample_sizes):
-        # If using parallel processing (i.e., multiple jobs)
-        if n_jobs != 1:
-            with tqdm_joblib(
-                tqdm(
-                    desc=f"Calculating power for n={ss} in {n_jobs} jobs", total=n_iter
-                )
-            ) as progress_bar:
-                iteration_pvals = Parallel(n_jobs=n_jobs)(
-                    delayed(simulation_func)(
-                        dist, ss, variables, dependent_var, binary_cols
-                    )
-                    for _ in np.arange(n_iter)
-                )
-                all_pvals[n, :, :] = np.stack(iteration_pvals)
-        # If not using parallel processing (i.e., a single job)
-        else:
-            iteration_pvals = [
-                simulation_func(dist, ss, variables, dependent_var, binary_cols)
-                for _ in tqdm(np.arange(n_iter), desc=f"Calculating power for n={ss}")
-            ]
-            all_pvals[n, :, :] = np.stack(iteration_pvals)
+    # Assign p-values to the appropriate position in all_pvals based on returned sample sizes
+    for idx, pval in enumerate(pvals):
+        n = np.where(sample_sizes == returned_sample_sizes[idx])[0][0]
+        _, iter_idx = tasks[idx]
+        all_pvals[n, iter_idx, :] = pval
 
     # Calculate the power by determining the proportion of p-values below the significance threshold
     power = np.mean(all_pvals < significance_threshold, axis=1)
