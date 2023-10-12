@@ -115,16 +115,21 @@ def compare_distributions(
 
 def plot_power_curves(
     power_df: pd.DataFrame,
+    required_power: float = 0.8,
     figure_kwargs: Optional[Dict] = None,
     plot_kwargs: Optional[Dict] = None,
 ) -> None:
     """
     Plot power curves for each variable using Seaborn.
 
+    This function fits a curve to the data and uses this to report the sample size required to achieve the
+    requested power level.
+
     Args:
         power_df (pd.DataFrame): Dataframe with columns 'sample_size', 'power', and 'variable'.
+        required_power (float, optional): The power level to plot a vertical line for. Defaults to 0.8.
         figure_kwargs (Dict, optional): Keyword arguments for plt.figure(). Defaults to {'figsize': (5, 3)}.
-        plot_kwargs (Dict, optional): Keyword arguments for sns.lineplot(). If None, uses default settings.
+        plot_kwargs (Dict, optional): Keyword arguments for sns.scatter(). If None, uses default settings.
     """
 
     if figure_kwargs is None:
@@ -133,22 +138,55 @@ def plot_power_curves(
     if plot_kwargs is None:
         plot_kwargs = {}
 
-    # Setting default values for plot_kwargs
-    plot_kwargs.setdefault("x", "sample_size")
-    plot_kwargs.setdefault("y", "power")
-    plot_kwargs.setdefault("hue", "variable")
-    plot_kwargs.setdefault("marker", "o")
-
     plt.figure(**figure_kwargs)
-    sns.lineplot(data=power_df, **plot_kwargs)
 
-    # Add title and labels
+    # Get matplotlib default color cycle
+    prop_cycle = plt.rcParams["axes.prop_cycle"]
+
+    # Loop through each variable to plot
+    for n, variable in enumerate(power_df["variable"].unique()):
+        subset = power_df[power_df["variable"] == variable]
+
+        # Scatter plot
+        sns.scatterplot(data=subset, x="sample_size", y="power", label=variable)
+
+        # Fit a polynomial (e.g., quadratic) curve to the data
+        p = np.polyfit(subset["sample_size"], subset["power"], 3)
+        curve_x = np.linspace(
+            subset["sample_size"].min(), subset["sample_size"].max(), 1000
+        )
+        curve_y = np.polyval(p, curve_x)
+
+        # Plot the fitted curve
+        plt.plot(curve_x, curve_y)
+
+        # Get sample size for 80% power
+        idx_power = np.where(curve_y > required_power)[0][0]
+        sample_size = curve_x[idx_power]
+
+        # Print out the sample size for this variable
+        print(
+            f"Sample size for {required_power * 100}% power for {variable}: {sample_size:.0f}"
+        )
+
+        # Plot a vertical line at the sample size for 80% power, cutting off at the line
+        # start y axis at the minimum power value currently plotted
+        plt.plot(
+            [sample_size, sample_size],
+            [0, curve_y[idx_power]],
+            color=prop_cycle.by_key()["color"][n],
+            linestyle="--",
+        )
+
+    # Adjust y axis limits based on the minimum and maximum power values
+    minimum_power = power_df["power"].min()
+    maximum_power = power_df["power"].max()
+    plt.ylim(minimum_power - 0.05, maximum_power + 0.05)
+
+    sns.despine()
+
     plt.title("Power Curves by Variable")
     plt.xlabel("Sample Size")
     plt.ylabel("Power")
     plt.legend(title="Variable")
-
-    sns.despine()
-
-    # Display the plot
     plt.show()
