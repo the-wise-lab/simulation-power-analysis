@@ -292,7 +292,7 @@ def power_analysis(
                 ]
 
         with tqdm_joblib(
-            tqdm(desc="Calculating power", total=len(tasks))
+            tqdm(desc="Calculating power", total=len(task_chunks))
         ) as progress_bar:
             results = Parallel(n_jobs=n_jobs)(
                 delayed(execute_chunk)(chunk) for chunk in task_chunks
