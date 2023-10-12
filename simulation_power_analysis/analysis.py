@@ -203,6 +203,12 @@ def power_analysis(
     # Ensure that sample sizes are positive for valid simulation
     assert np.all(sample_sizes > 0)
 
+    # Check for anything that looks like a binary column based on the number of unique values, 
+    # and raise a warning if it isn't included in the binary_cols list
+    for col in data.columns:
+        if len(data[col].unique()) == 2 and col not in binary_cols:
+            print(f"Warning: {col} looks like a binary column but is not included in binary_cols.")
+
     # If variables are not explicitly specified, use all columns in the data
     if variables is None:
         variables = data.columns.tolist()
