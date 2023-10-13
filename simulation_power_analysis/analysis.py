@@ -98,7 +98,19 @@ def simulation_func(
     """
 
     # Generate synthetic data
-    synthetic_data = sample_synthetic(dist, sample_size, binary_cols)
+    complete_data = False
+
+    # Sometimes the synthetic data has missing values or infs, 
+    # so we need to keep trying until it doesn't
+    while not complete_data:
+        synthetic_data = sample_synthetic(dist, sample_size, binary_cols)
+        if (
+            not synthetic_data.isnull().sum().sum()
+            and not np.isinf(synthetic_data).sum().sum()
+        ):
+            complete_data = True
+
+    # synthetic_data = sample_synthetic(dist, sample_size, binary_cols)
 
     # Check that there are no missing values or infs
     if synthetic_data.isnull().sum().sum() > 0:
@@ -107,7 +119,6 @@ def simulation_func(
         print(f"Warning: Infs in synthetic data for sample size {sample_size}.")
 
     try:
-
         # Construct the regression formula
         formula = f'{dependent_var} ~ {" + ".join(predictors)}'
 
@@ -176,7 +187,7 @@ def tqdm_joblib(tqdm_object: tqdm) -> tqdm:
         tqdm_object.close()
 
 
-def chunk_tasks(tasks: List[int], n: int, verbose:bool = False) -> List[List[int]]:
+def chunk_tasks(tasks: List[int], n: int, verbose: bool = False) -> List[List[int]]:
     """
     Split the tasks into n chunks based on sample size.
 
