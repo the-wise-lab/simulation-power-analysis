@@ -323,9 +323,6 @@ def power_analysis(
     returned_sample_sizes = np.array([result[0] for result in results])
     pvals = np.array([result[1] for result in results])
 
-    print(returned_sample_sizes.shape)
-    print(pvals.shape)
-
     # Reshape the p-values into the expected all_pvals shape
     all_pvals = np.zeros((len(sample_sizes), n_iter, len(variables)))
 
