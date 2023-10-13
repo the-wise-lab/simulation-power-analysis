@@ -100,10 +100,18 @@ def simulation_func(
     # Generate synthetic data
     synthetic_data = sample_synthetic(dist, sample_size, binary_cols)
 
-    # Construct the regression formula
-    formula = f'{dependent_var} ~ {" + ".join(predictors)}'
+    # Check that there are no missing values or infs
+    if synthetic_data.isnull().sum().sum() > 0:
+        print(f"Warning: NaNs in synthetic data for sample size {sample_size}.")
+    if np.isinf(synthetic_data).sum().sum() > 0:
+        print(f"Warning: Infs in synthetic data for sample size {sample_size}.")
 
     try:
+
+        # Construct the regression formula
+        formula = f'{dependent_var} ~ {" + ".join(predictors)}'
+
+        # try:
         # Run regression
         model = smf.ols(formula, data=synthetic_data).fit()
 
@@ -117,7 +125,13 @@ def simulation_func(
         # Return p-values for predictors (ignoring the intercept)
         return sample_size, fitted_model.pvalues_bootstrap[1:]
 
-    except:
+    except Exception as e:
+        # Print a warning
+        print(f"Warning: Failed to fit model for sample size {sample_size}.")
+        print(e)
+        # print number of nans and infs in the data
+        print(f"Number of NaNs: {np.isnan(synthetic_data).sum().sum()}")
+        print(f"Number of Infs: {np.isinf(synthetic_data).sum().sum()}")
         # If an exception occurs, return NaNs of length equal to the number of predictors
         return sample_size, np.zeros(len(predictors)) * np.nan
 
@@ -309,6 +323,9 @@ def power_analysis(
     returned_sample_sizes = np.array([result[0] for result in results])
     pvals = np.array([result[1] for result in results])
 
+    print(returned_sample_sizes.shape)
+    print(pvals.shape)
+
     # Reshape the p-values into the expected all_pvals shape
     all_pvals = np.zeros((len(sample_sizes), n_iter, len(variables)))
 
@@ -317,6 +334,8 @@ def power_analysis(
         n = np.where(sample_sizes == returned_sample_sizes[idx])[0][0]
         _, iter_idx = tasks[idx]
         all_pvals[n, iter_idx, :] = pval
+
+    # print(all_pvals)
 
     # Calculate the power by determining the proportion of p-values below the significance threshold
     power = np.mean(all_pvals < significance_threshold, axis=1)
