@@ -240,6 +240,7 @@ def power_analysis(
     significance_threshold: float = 0.05,
     format: str = "long",
     n_jobs: int = -1,
+    n_chunks_multiplier: int = 1,
 ) -> pd.DataFrame:
     """
     Compute power analysis over various sample sizes and return results in a dataframe.
@@ -254,6 +255,9 @@ def power_analysis(
         significance_threshold (float): Significance level for power calculation. Defaults to 0.05.
         format (str): Output format, either "long" or "wide". Defaults to "long".
         n_jobs (int): Number of jobs to run in parallel. Runs without joblib if set to 1. Defaults to 4.
+        n_chunks_multiplier (int): Multiplier for the number of chunks to use for parallel execution. If set to 1,
+        creates as many chunks as there are jobs. Otherwise, n_jobs is multiplied by this value. Can be useful 
+        for limiting the size of individual chunks. Defaults to 1.
 
     Returns:
         pd.DataFrame: Power analysis results, in either long or wide format. Values represent
@@ -300,7 +304,7 @@ def power_analysis(
     # Parallel execution
     if n_jobs != 1:
         # Chunk tasks for parallel execution
-        task_chunks = chunk_tasks([ss for ss, _ in tasks], n_jobs)
+        task_chunks = chunk_tasks([ss for ss, _ in tasks], n_jobs * n_chunks_multiplier)
 
         print(
             f"Running {len(tasks)} tasks in {len(task_chunks)} chunks with {n_jobs} jobs."
