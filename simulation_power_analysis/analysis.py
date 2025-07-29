@@ -13,6 +13,14 @@ from tqdm import tqdm
 import statsmodels.formula.api as smf
 import warnings
 
+# MPI imports with fallback
+try:
+    from mpi4py import MPI
+    MPI_AVAILABLE = True
+except ImportError:
+    MPI_AVAILABLE = False
+    MPI = None
+
 
 def sample_synthetic(
     dist: GaussianMultivariate, n_samples: int, binary_columns: List[str] = None
@@ -78,7 +86,8 @@ def simulation_func(
     predictors: List[str],
     dependent_var: str,
     binary_cols: List[str] = [],
-) -> np.ndarray:
+    iter_idx: int = None,
+) -> tuple:
     """
     Simulate synthetic data, fit a regression model, and perform bootstrapping.
 
@@ -88,13 +97,10 @@ def simulation_func(
         predictors (List[str]): List of predictor variables.
         dependent_var (str): Dependent variable.
         binary_cols (List[str], optional): Columns to convert to binary. Defaults to an empty list.
+        iter_idx (int, optional): Iteration index for tracking.
 
     Returns:
-        np.ndarray: p-values from bootstrap, or NaNs if an exception occurs.
-
-    Example:
-        >>> sample_data = pd.DataFrame(...)
-        >>> results = sim_func(sample_data, ['AD', 'Compul', 'SW', 'gender', 'age', 'motivation'], 'transition_var', ['gender'])
+        tuple: (sample_size, iter_idx, p-values from bootstrap or NaNs)
     """
 
     # Generate synthetic data
@@ -134,7 +140,7 @@ def simulation_func(
         _ = fitted_model.conf_int_bootstrap()
 
         # Return p-values for predictors (ignoring the intercept)
-        return sample_size, fitted_model.pvalues_bootstrap[1:]
+        return sample_size, iter_idx, fitted_model.pvalues_bootstrap[1:]
 
     except Exception as e:
         # Print a warning
@@ -144,7 +150,7 @@ def simulation_func(
         print(f"Number of NaNs: {np.isnan(synthetic_data).sum().sum()}")
         print(f"Number of Infs: {np.isinf(synthetic_data).sum().sum()}")
         # If an exception occurs, return NaNs of length equal to the number of predictors
-        return sample_size, np.zeros(len(predictors)) * np.nan
+        return sample_size, iter_idx, np.zeros(len(predictors)) * np.nan
 
 
 @contextlib.contextmanager
@@ -230,6 +236,23 @@ def chunk_tasks(tasks: List[int], n: int, verbose: bool = False) -> List[List[in
     return chunks
 
 
+def distribute_tasks_mpi(tasks: List[int], comm) -> List[int]:
+    """
+    Distribute tasks across MPI ranks.
+    
+    Args:
+        tasks (List[int]): List of sample sizes to distribute
+        comm: MPI communicator
+        
+    Returns:
+        List[int]: Tasks assigned to current rank
+    """
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+    # Distribute tasks round-robin style (works for any list, not just ints)
+    my_tasks = [tasks[i] for i in range(rank, len(tasks), size)]
+    return my_tasks
+
 def power_analysis(
     data: pd.DataFrame,
     dependent_var: str,
@@ -241,6 +264,7 @@ def power_analysis(
     format: str = "long",
     n_jobs: int = -1,
     n_chunks_multiplier: int = 1,
+    use_mpi: bool = True,
 ) -> pd.DataFrame:
     """
     Compute power analysis over various sample sizes and return results in a dataframe.
@@ -258,6 +282,7 @@ def power_analysis(
         n_chunks_multiplier (int): Multiplier for the number of chunks to use for parallel execution. If set to 1,
         creates as many chunks as there are jobs. Otherwise, n_jobs is multiplied by this value. Can be useful 
         for limiting the size of individual chunks. Defaults to 1.
+        use_mpi (bool): Whether to use MPI for parallelization when available. Defaults to True.
 
     Returns:
         pd.DataFrame: Power analysis results, in either long or wide format. Values represent
@@ -298,11 +323,42 @@ def power_analysis(
 
     # Function to execute a single task
     def execute_task(task):
-        ss, _ = task
-        return simulation_func(dist, ss, variables, dependent_var, binary_cols)
+        ss, iter_idx = task
+        return simulation_func(dist, ss, variables, dependent_var, binary_cols, iter_idx=iter_idx)
 
-    # Parallel execution
-    if n_jobs != 1:
+    # MPI execution
+    if MPI_AVAILABLE and use_mpi:
+        comm = MPI.COMM_WORLD
+        rank = comm.Get_rank()
+        size = comm.Get_size()
+
+        if rank == 0:
+            print(f"Running {len(tasks)} tasks with MPI using {size} processes.")
+
+        # Distribute full (ss, i) tasks across ranks
+        my_tasks = distribute_tasks_mpi(tasks, comm)
+
+        # Each rank processes its assigned (ss, i) tasks
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=FutureWarning)
+            my_results = []
+            iterator = tqdm(my_tasks, desc=f"Rank {rank} calculating power") if rank == 0 else my_tasks
+            for task in iterator:
+                result = execute_task(task)
+                my_results.append(result)
+
+        # Gather all results to rank 0
+        all_results = comm.gather(my_results, root=0)
+
+        if rank == 0:
+            # Flatten results from all ranks
+            results = [item for sublist in all_results for item in sublist]
+        else:
+            # Non-root ranks return None (or empty DataFrame)
+            return pd.DataFrame()
+    
+    # Parallel execution with joblib
+    elif n_jobs != 1:
         # Chunk tasks for parallel execution
         task_chunks = chunk_tasks([ss for ss, _ in tasks], n_jobs * n_chunks_multiplier)
 
@@ -316,7 +372,7 @@ def power_analysis(
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", category=FutureWarning)
                 return [
-                    simulation_func(dist, ss, variables, dependent_var, binary_cols)
+                    simulation_func(dist, ss, variables, dependent_var, binary_cols, iter_idx=None)
                     for ss in chunk
                 ]
 
@@ -334,20 +390,20 @@ def power_analysis(
     else:
         results = [execute_task(task) for task in tqdm(tasks, desc="Calculating power")]
 
-    # Unpack sample sizes and p-values from results
+    # Unpack sample sizes, iteration indices, and p-values from results
     returned_sample_sizes = np.array([result[0] for result in results])
-    pvals = np.array([result[1] for result in results])
+    returned_iter_indices = np.array([result[1] for result in results])
+    pvals = np.array([result[2] for result in results])
 
     # Reshape the p-values into the expected all_pvals shape
     all_pvals = np.zeros((len(sample_sizes), n_iter, len(variables)))
 
-    # Assign p-values to the appropriate position in all_pvals based on returned sample sizes
-    for idx, pval in enumerate(pvals):
-        n = np.where(sample_sizes == returned_sample_sizes[idx])[0][0]
-        _, iter_idx = tasks[idx]
-        all_pvals[n, iter_idx, :] = pval
-
-    # print(all_pvals)
+    # Assign p-values to the appropriate position in all_pvals based on returned sample sizes and iteration indices
+    for idx in range(len(results)):
+        ss = returned_sample_sizes[idx]
+        iter_idx = returned_iter_indices[idx]
+        n = np.where(sample_sizes == ss)[0][0]
+        all_pvals[n, iter_idx, :] = pvals[idx]
 
     # Calculate the power by determining the proportion of p-values below the significance threshold
     power = np.mean(all_pvals < significance_threshold, axis=1)
